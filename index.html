@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>イチゴ選別システム V1.29</title>
+    <title>イチゴ選別システム V1.30</title>
     <style>
         body { background-color: #000; color: #fff; text-align: center; font-family: sans-serif; padding: 10px; overflow: hidden; }
         #status { color: #888; font-size: 14px; margin-bottom: 5px; }
@@ -18,9 +18,9 @@
         }
 
         .btn-container { position: relative; z-index: 10; }
-        .my-button { width: 95%; max-width: 400px; height: 80px; font-size: 24px; font-weight: bold; border-radius: 20px; border: none; color: white; margin: 10px 0; }
-        #connectBtn { background-color: #28a745; }
-        #tareBtn { background-color: #ff8c00; }
+        .my-button { width: 95%; max-width: 400px; height: 85px; font-size: 24px; font-weight: bold; border-radius: 20px; border: none; color: white; margin: 10px 0; }
+        #connectBtn { background-color: #28a745; box-shadow: 0 4px #1e7e34; }
+        #tareBtn { background-color: #ff8c00; box-shadow: 0 4px #d97700; }
     </style>
 </head>
 <body>
@@ -38,7 +38,6 @@
         const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
         
         const sounds = {};
-        // 既存のサイズ用 + 3から12までの玉数用 + start
         const fileNames = ["2l", "l", "m", "s", "start", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
         
         fileNames.forEach(name => {
@@ -54,10 +53,16 @@
 
         document.getElementById('connectBtn').onclick = async () => {
             try {
-                // iPhone再生許可（音は出さない）
+                // iPhone再生許可の儀式（start以外は無音で叩く）
                 for (let key in sounds) {
-                    sounds[key].muted = true;
-                    sounds[key].play().then(() => { sounds[key].pause(); sounds[key].muted = false; }).catch(() => {});
+                    if (key !== "START") {
+                        sounds[key].muted = true;
+                        sounds[key].play().then(() => { 
+                            sounds[key].pause(); 
+                            sounds[key].currentTime = 0;
+                            sounds[key].muted = false; 
+                        }).catch(() => {});
+                    }
                 }
 
                 const device = await navigator.bluetooth.requestDevice({
@@ -70,13 +75,17 @@
                 await bluetoothChar.startNotifications();
                 
                 document.getElementById('status').innerText = "✅ 接続中";
-                sounds["START"].play();
+                
+                // start.mp3 を確実に再生
+                sounds["START"].muted = false;
+                sounds["START"].currentTime = 0;
+                sounds["START"].play().catch(e => console.log("Start sound failed", e));
 
                 bluetoothChar.addEventListener('characteristicvaluechanged', (e) => {
                     const val = new TextDecoder().decode(e.target.value);
                     processWeight(parseFloat(val));
                 });
-            } catch (err) { alert("エラー: " + err); }
+            } catch (err) { alert("接続エラー: " + err); }
         };
 
         function processWeight(w) {
@@ -106,16 +115,16 @@
             let textColor = "#fff";
             let audioKey = "";
 
-            // --- 判定ロジック：平均果重に基づく分岐 ---
-            if (diff >= 30.0) { // 8玉〜3玉
+            // --- 判定ロジック V1.30 (8玉境界修正) ---
+            if (diff >= 28.3) { // 8玉(30.0g)以上の範囲は紫色
                 label = getTamaNum(diff); bgColor = "#800080"; audioKey = label;
-            } else if (diff >= 21.8) { // 11玉〜9玉
+            } else if (diff >= 21.0) { // 11玉〜9玉の範囲は黄緑色
                 label = getTamaNum(diff); bgColor = "#adff2f"; audioKey = label;
-            } else if (diff >= 20.0) { // 12玉
+            } else if (diff >= 19.3) { // 12玉(20.0g)
                 label = "12"; bgColor = "#ffff00"; textColor = "#000"; audioKey = "12";
             } else if (diff >= 15.5) { // 2L
                 label = "2L"; bgColor = "#ff0000"; audioKey = "2L";
-            } else if (diff >= 11.5) { // L (12.6, 13.3, 14.1の中間をとって調整)
+            } else if (diff >= 11.5) { // L
                 label = "L"; bgColor = "#0000ff"; audioKey = "L";
             } else if (diff >= 10.0) { // M
                 label = "M"; bgColor = "#ff0000"; audioKey = "M";
@@ -125,21 +134,21 @@
 
             if (label) {
                 showFlash(label, bgColor, textColor);
-                if(sounds[audioKey.toUpperCase()]) {
-                    sounds[audioKey.toUpperCase()].currentTime = 0;
-                    sounds[audioKey.toUpperCase()].play();
+                const key = audioKey.toUpperCase();
+                if(sounds[key]) {
+                    sounds[key].currentTime = 0;
+                    sounds[key].play();
                 }
             }
         }
 
-        // 玉数判定用サブ関数
         function getTamaNum(d) {
             if (d >= 70.0) return "3";
             if (d >= 54.0) return "4";
             if (d >= 44.0) return "5";
             if (d >= 37.0) return "6";
             if (d >= 32.0) return "7";
-            if (d >= 28.5) return "8";
+            if (d >= 28.3) return "8"; // 紫色の境界
             if (d >= 25.3) return "9";
             if (d >= 22.9) return "10";
             return "11";
