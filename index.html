@@ -3,44 +3,45 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>イチゴ選別システム V1.23</title>
+    <title>イチゴ選別システム V1.24</title>
     <style>
         body { background-color: #000; color: #fff; text-align: center; font-family: sans-serif; padding: 10px; }
-        #status { color: #888; font-size: 14px; margin-bottom: 10px; }
+        #status { color: #888; font-size: 14px; margin-bottom: 5px; }
         #weight { font-size: 100px; font-weight: bold; color: #00ff00; margin: 10px 0; line-height: 1; }
-        #diff-display { font-size: 35px; color: #ff4757; height: 40px; }
-        #size-display { font-size: 70px; font-weight: bold; color: #ffeb3b; height: 80px; margin-top: 10px; }
-        .my-button { width: 90%; max-width: 400px; height: 80px; font-size: 22px; font-weight: bold; border-radius: 20px; border: none; color: white; margin: 10px 0; }
-        #connectBtn { background-color: #28a745; }
-        #tareBtn { background-color: #ff8c00; }
-        #audio-debug { color: #ff4757; font-size: 12px; }
+        #diff-display { font-size: 35px; color: #ff4757; height: 40px; margin-top: 5px; }
+        #size-display { font-size: 75px; font-weight: bold; color: #ffeb3b; height: 90px; margin-top: 10px; }
+        .my-button { width: 95%; max-width: 400px; height: 85px; font-size: 24px; font-weight: bold; border-radius: 20px; border: none; color: white; margin: 10px 0; }
+        #connectBtn { background-color: #28a745; box-shadow: 0 4px #1e7e34; }
+        #tareBtn { background-color: #ff8c00; box-shadow: 0 4px #d97700; }
+        #audio-debug { color: #ff4757; font-size: 14px; min-height: 20px; }
     </style>
 </head>
 <body>
     <div id="status">Bluetooth未接続</div>
-    <div id="audio-debug"></div> <div id="weight">0.0<span>g</span></div>
+    <div id="audio-debug"></div>
+    <div id="weight">0.0<span>g</span></div>
     <div id="diff-display">--.- g 減</div>
     <div id="size-display">---</div>
     
-    <button id="connectBtn" class="my-button">① 接続・音声ON</button>
+    <button id="connectBtn" class="my-button">① 接続・音声開始</button>
     <button id="tareBtn" class="my-button">② 基準リセット</button>
 
     <script>
         const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
         const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
         
-        // --- ★ここをチェック！ ---
-        // GitHub PagesのURLの末尾が「/」で終わるようにしてください
-        // 例: "https://[ユーザー名].github.io/[リポジトリ名]/strawberry-size/"
-        const AUDIO_BASE_URL = "./strawberry-size/"; 
+        // --- 音声ファイルのURL設定 ---
+        // GitHub Pagesで公開している場合、相対パス "./" で自身のディレクトリを参照します
+        const AUDIO_BASE_URL = "./"; 
 
         const sounds = {};
         ["2l", "l", "m", "s"].forEach(id => {
             const key = id.toUpperCase();
+            // 小文字のファイル名で読み込み
             sounds[key] = new Audio(AUDIO_BASE_URL + id + ".mp3");
-            // 読み込みエラー時の処理
+            sounds[key].load();
             sounds[key].onerror = () => {
-                document.getElementById('audio-debug').innerText = `エラー: ${id}.mp3 が見つかりません`;
+                document.getElementById('audio-debug').innerText = `読込失敗: ${id}.mp3`;
             };
         });
 
@@ -51,12 +52,10 @@
 
         document.getElementById('connectBtn').onclick = async () => {
             try {
-                // iPhone対策: ボタンクリック時に全音声を空再生して「ロック解除」
+                // iPhoneの再生制限解除（全音声を一瞬鳴らす）
                 for (let key in sounds) {
-                    sounds[key].play().then(() => {
-                        sounds[key].pause();
-                        sounds[key].currentTime = 0;
-                    }).catch(e => console.log("Unlock failed", e));
+                    const a = sounds[key];
+                    a.play().then(() => { a.pause(); a.currentTime = 0; }).catch(() => {});
                 }
 
                 const device = await navigator.bluetooth.requestDevice({
@@ -67,13 +66,16 @@
                 const service = await server.getPrimaryService(SERVICE_UUID);
                 bluetoothChar = await service.getCharacteristic(CHARACTERISTIC_UUID);
                 await bluetoothChar.startNotifications();
-                document.getElementById('status').innerText = "✅ 接続完了！";
                 
+                document.getElementById('status').innerText = "✅ 稼働中";
+                document.getElementById('audio-debug').innerText = "音声準備完了";
+                document.getElementById('audio-debug').style.color = "#28a745";
+
                 bluetoothChar.addEventListener('characteristicvaluechanged', (e) => {
                     const val = new TextDecoder().decode(e.target.value);
                     processWeight(parseFloat(val));
                 });
-            } catch (err) { alert("接続失敗: " + err); }
+            } catch (err) { alert("接続エラー: " + err); }
         };
 
         function processWeight(w) {
@@ -87,10 +89,11 @@
                 const maxW = Math.max(...weightHistory);
                 const minW = Math.min(...weightHistory);
                 
-                // 0.2g以内の変動なら「静止」とみなす
+                // 1秒間の変動が0.2g以内なら「静止」と判定
                 if (maxW - minW < 0.2) {
                     if (Math.abs(stableWeight - w) > 0.5) { 
-                        if (stableWeight > w) { // 減った時だけ判定
+                        // 基準値より減ったときだけサイズ判定
+                        if (stableWeight > w) {
                             checkDifference(stableWeight, w);
                         }
                         stableWeight = w;
@@ -101,6 +104,7 @@
 
         function checkDifference(oldW, newW) {
             const diff = oldW - newW;
+            // 5g未満は誤差として無視
             if (diff < 5.0) return;
 
             document.getElementById('diff-display').innerText = diff.toFixed(1) + " g 減";
@@ -108,6 +112,7 @@
             let sizeKey = "";
             let color = "#fff";
 
+            // 引き抜き計量用判定基準
             if (diff >= 15.5) { sizeKey = "2L"; color = "#ff4757"; }
             else if (diff >= 12.0) { sizeKey = "L"; color = "#ffa502"; }
             else if (diff >= 10.0) { sizeKey = "M"; color = "#2ed573"; }
@@ -119,12 +124,9 @@
                 
                 const audio = sounds[sizeKey];
                 audio.currentTime = 0;
-                let playPromise = audio.play();
-                if (playPromise !== undefined) {
-                    playPromise.catch(error => {
-                        document.getElementById('audio-debug').innerText = "再生ブロックされました";
-                    });
-                }
+                audio.play().catch(e => {
+                    document.getElementById('audio-debug').innerText = "再生エラー";
+                });
             }
         }
 
