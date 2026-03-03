@@ -3,46 +3,51 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>イチゴ選別システム V1.25</title>
+    <title>イチゴ選別システム V1.26</title>
     <style>
-        body { background-color: #000; color: #fff; text-align: center; font-family: sans-serif; padding: 10px; }
+        body { background-color: #000; color: #fff; text-align: center; font-family: sans-serif; padding: 10px; overflow: hidden; }
         #status { color: #888; font-size: 14px; margin-bottom: 5px; }
-        #weight { font-size: 100px; font-weight: bold; color: #00ff00; margin: 10px 0; line-height: 1.1; }
-        #weight span { font-size: 30px; margin-left: 5px; }
-        #diff-display { font-size: 35px; color: #ff4757; height: 40px; margin-top: 5px; }
-        #size-display { font-size: 75px; font-weight: bold; color: #ffeb3b; height: 90px; margin-top: 10px; }
-        .my-button { width: 95%; max-width: 400px; height: 85px; font-size: 24px; font-weight: bold; border-radius: 20px; border: none; color: white; margin: 10px 0; }
-        #connectBtn { background-color: #28a745; box-shadow: 0 4px #1e7e34; }
-        #tareBtn { background-color: #ff8c00; box-shadow: 0 4px #d97700; }
-        #audio-debug { color: #ff4757; font-size: 14px; min-height: 20px; }
+        #weight { font-size: 80px; font-weight: bold; color: #00ff00; margin: 5px 0; }
+        #weight span { font-size: 24px; }
+        #diff-display { font-size: 30px; color: #ff4757; height: 35px; }
+        
+        /* 全画面フラッシュ用 */
+        #flash-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            display: none; align-items: center; justify-content: center;
+            z-index: 100; font-size: 150px; font-weight: bold; color: #fff;
+        }
+
+        .btn-container { position: relative; z-index: 10; }
+        .my-button { width: 95%; max-width: 400px; height: 80px; font-size: 22px; font-weight: bold; border-radius: 20px; border: none; color: white; margin: 10px 0; }
+        #connectBtn { background-color: #28a745; }
+        #tareBtn { background-color: #ff8c00; }
+        #audio-debug { color: #ff4757; font-size: 12px; }
     </style>
 </head>
 <body>
-    <div id="status">Bluetooth未接続</div>
+    <div id="flash-overlay"></div> <div id="status">Bluetooth未接続</div>
     <div id="audio-debug"></div>
     <div id="weight">0.0<span>g</span></div>
     <div id="diff-display">--.- g 減</div>
-    <div id="size-display">---</div>
     
-    <button id="connectBtn" class="my-button">① 接続・音声開始</button>
-    <button id="tareBtn" class="my-button">② 基準リセット</button>
+    <div class="btn-container">
+        <button id="connectBtn" class="my-button">① 接続・開始</button>
+        <button id="tareBtn" class="my-button">② 基準リセット</button>
+    </div>
 
     <script>
         const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
         const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
         
-        // --- 音声ファイル読み込み ---
         const sounds = {};
-        const fileNames = ["2l", "l", "m", "s"];
+        const fileNames = ["2l", "l", "m", "s", "start"];
         
         fileNames.forEach(name => {
             const key = name.toUpperCase();
-            // パスをカレントディレクトリ直下に修正
             sounds[key] = new Audio("./" + name + ".mp3");
             sounds[key].load();
-            sounds[key].onerror = () => {
-                document.getElementById('audio-debug').innerText = `エラー: ${name}.mp3 が見つかりません`;
-            };
+            sounds[key].onerror = () => { console.log(name + ".mp3 not found"); };
         });
 
         let bluetoothChar = null;
@@ -52,10 +57,9 @@
 
         document.getElementById('connectBtn').onclick = async () => {
             try {
-                // iPhoneの音声再生制限を解除
+                // iPhoneの制限解除（一瞬だけ鳴らして止める）
                 for (let key in sounds) {
-                    const a = sounds[key];
-                    a.play().then(() => { a.pause(); a.currentTime = 0; }).catch(() => {});
+                    sounds[key].play().then(() => { sounds[key].pause(); sounds[key].currentTime = 0; }).catch(() => {});
                 }
 
                 const device = await navigator.bluetooth.requestDevice({
@@ -68,14 +72,15 @@
                 await bluetoothChar.startNotifications();
                 
                 document.getElementById('status').innerText = "✅ 接続中";
-                document.getElementById('audio-debug').innerText = "音声OK";
-                document.getElementById('audio-debug').style.color = "#28a745";
+                
+                // 開始音だけ鳴らす
+                sounds["START"].play();
 
                 bluetoothChar.addEventListener('characteristicvaluechanged', (e) => {
                     const val = new TextDecoder().decode(e.target.value);
                     processWeight(parseFloat(val));
                 });
-            } catch (err) { alert("Bluetooth接続エラー: " + err); }
+            } catch (err) { alert("エラー: " + err); }
         };
 
         function processWeight(w) {
@@ -83,18 +88,14 @@
             document.getElementById('weight').innerHTML = `${w.toFixed(1)}<span>g</span>`;
 
             weightHistory.push(w);
-            if (weightHistory.length > 5) weightHistory.shift(); // 安定判定をより慎重に（約1.5秒）
+            if (weightHistory.length > 3) weightHistory.shift();
 
-            if (weightHistory.length >= 3) {
+            if (weightHistory.length === 3) {
                 const maxW = Math.max(...weightHistory);
                 const minW = Math.min(...weightHistory);
-                
-                // 数値が安定（変動0.2g以内）
                 if (maxW - minW < 0.2) {
                     if (Math.abs(stableWeight - w) > 0.5) { 
-                        if (stableWeight > w) { // 減少（引き抜き）を検知
-                            checkDifference(stableWeight, w);
-                        }
+                        if (stableWeight > w) checkDifference(stableWeight, w);
                         stableWeight = w;
                     }
                 }
@@ -108,30 +109,37 @@
             document.getElementById('diff-display').innerText = diff.toFixed(1) + " g 減";
             
             let sizeKey = "";
-            let color = "#fff";
+            let bgColor = "";
 
-            // 判定基準
-            if (diff >= 15.5) { sizeKey = "2L"; color = "#ff4757"; }
-            else if (diff >= 12.0) { sizeKey = "L"; color = "#ffa502"; }
-            else if (diff >= 10.0) { sizeKey = "M"; color = "#2ed573"; }
-            else if (diff >= 7.0)  { sizeKey = "S"; color = "#1e90ff"; }
+            // サイズ判定と指定の色設定
+            if (diff >= 15.5) { sizeKey = "2L"; bgColor = "#ff0000"; } // 赤
+            else if (diff >= 12.0) { sizeKey = "L"; bgColor = "#0000ff"; } // 青
+            else if (diff >= 10.0) { sizeKey = "M"; bgColor = "#ff0000"; } // 赤
+            else if (diff >= 7.0)  { sizeKey = "S"; bgColor = "#0000ff"; } // 青
 
-            if (sizeKey && sounds[sizeKey]) {
-                document.getElementById('size-display').innerText = sizeKey + " サイズ";
-                document.getElementById('size-display').style.color = color;
-                
+            if (sizeKey) {
+                showFlash(sizeKey, bgColor);
                 const audio = sounds[sizeKey];
                 audio.currentTime = 0;
-                audio.play().catch(e => {
-                    document.getElementById('audio-debug').innerText = "再生ブロック";
-                });
+                audio.play();
             }
+        }
+
+        function showFlash(text, color) {
+            const overlay = document.getElementById('flash-overlay');
+            overlay.innerText = text;
+            overlay.style.backgroundColor = color;
+            overlay.style.display = 'flex';
+            
+            // 1.2秒後に消す
+            setTimeout(() => {
+                overlay.style.display = 'none';
+            }, 1200);
         }
 
         document.getElementById('tareBtn').onclick = () => {
             stableWeight = currentWeight;
-            document.getElementById('size-display').innerText = "基準リセット";
-            document.getElementById('diff-display').innerText = "--.- g 減";
+            document.getElementById('diff-display').innerText = "基準セット完了";
         };
     </script>
 </body>
