@@ -3,49 +3,31 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>イチゴ選別システム V1.21</title>
+    <title>イチゴ選別システム V1.22</title>
     <style>
-        body { 
-            background-color: #000; color: #fff; text-align: center; 
-            font-family: -apple-system, sans-serif; padding: 10px; overflow: hidden; 
-        }
-        #status { color: #888; font-size: 14px; margin-top: 5px; }
-        #weight { font-size: 110px; font-weight: bold; color: #00ff00; margin: 5px 0; line-height: 1.1; }
-        #weight span { font-size: 30px; margin-left: 5px; }
-        #size-display { font-size: 70px; font-weight: bold; color: #ffeb3b; margin-bottom: 20px; height: 80px; }
-        
-        .btn-container { display: flex; flex-direction: column; align-items: center; gap: 15px; }
-        .my-button { 
-            display: block; width: 90%; max-width: 400px; height: 85px; 
-            font-size: 24px; font-weight: bold; border-radius: 20px; border: none; color: white;
-        }
+        body { background-color: #000; color: #fff; text-align: center; font-family: sans-serif; padding: 10px; }
+        #status { color: #888; font-size: 14px; }
+        #weight { font-size: 100px; font-weight: bold; color: #00ff00; margin: 10px 0; }
+        #diff-display { font-size: 40px; color: #ff4757; height: 50px; margin-bottom: 10px; }
+        #size-display { font-size: 70px; font-weight: bold; color: #ffeb3b; height: 80px; }
+        .my-button { width: 90%; max-width: 400px; height: 80px; font-size: 24px; font-weight: bold; border-radius: 20px; border: none; color: white; margin: 10px 0; }
         #connectBtn { background-color: #28a745; }
         #tareBtn { background-color: #ff8c00; }
-        
-        .info-table { margin: 15px auto; font-size: 12px; color: #aaa; border-collapse: collapse; }
-        .info-table td { border: 1px solid #333; padding: 4px 8px; }
     </style>
 </head>
 <body>
     <div id="status">Bluetooth未接続</div>
     <div id="weight">0.0<span>g</span></div>
+    <div id="diff-display">--.- g 減</div>
     <div id="size-display">---</div>
     
-    <div class="btn-container">
-        <button id="connectBtn" class="my-button">① 接続して開始</button>
-        <button id="tareBtn" class="my-button">② 0gセット (風袋)</button>
-    </div>
-
-    <table class="info-table">
-        <tr><td>S: 7.0~</td><td>M: 10.0~</td><td>L: 12.0~</td><td>2L: 15.5~</td></tr>
-    </table>
+    <button id="connectBtn" class="my-button">① 接続して開始</button>
+    <button id="tareBtn" class="my-button">② 基準リセット</button>
 
     <script>
         const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
         const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
         
-        // --- 音声ファイルの設定 ---
-        // GitHubのリポジトリ構造に合わせてここを変更してください
         const AUDIO_BASE_URL = "strawberry-size/"; 
         const sounds = {
             "2L": new Audio(AUDIO_BASE_URL + "2l.mp3"),
@@ -55,14 +37,14 @@
         };
 
         let bluetoothChar = null;
-        let lastAnnouncedWeight = 0;
+        let baseWeight = 0;      // 基準となる重さ
+        let currentWeight = 0;   // 現在の重さ
+        let stableWeight = 0;    // 安定後の重さ
+        let weightHistory = [];  // 安定判定用履歴
 
-        // 接続処理
         document.getElementById('connectBtn').onclick = async () => {
             try {
-                // iPhone対策: ユーザー操作時にすべての音声を一度「ロード」して再生許可を得る
-                Object.values(sounds).forEach(s => { s.load(); });
-
+                Object.values(sounds).forEach(s => s.load());
                 const device = await navigator.bluetooth.requestDevice({
                     filters: [{ name: 'ESP32_Strawberry_Scale' }],
                     optionalServices: [SERVICE_UUID]
@@ -70,60 +52,69 @@
                 const server = await device.gatt.connect();
                 const service = await server.getPrimaryService(SERVICE_UUID);
                 bluetoothChar = await service.getCharacteristic(CHARACTERISTIC_UUID);
-                
                 await bluetoothChar.startNotifications();
-                document.getElementById('status').innerText = "✅ 接続中";
-                document.getElementById('status').style.color = "#28a745";
-
+                document.getElementById('status').innerText = "✅ 稼働中（マイナス計量モード）";
+                
                 bluetoothChar.addEventListener('characteristicvaluechanged', (e) => {
                     const val = new TextDecoder().decode(e.target.value);
-                    const weight = parseFloat(val);
-                    updateDisplay(weight);
+                    processWeight(parseFloat(val));
                 });
-
-            } catch (err) { alert("エラー: " + err); }
+            } catch (err) { alert(err); }
         };
 
-        function updateDisplay(w) {
+        function processWeight(w) {
+            currentWeight = w;
             document.getElementById('weight').innerHTML = `${w.toFixed(1)}<span>g</span>`;
-            
-            if (w < 5.0) {
-                lastAnnouncedWeight = 0;
-                document.getElementById('size-display').innerText = "---";
-                return;
-            }
 
-            if (Math.abs(w - lastAnnouncedWeight) > 3.0) {
-                playSizeAudio(w);
-                lastAnnouncedWeight = w;
+            // 安定判定（直近3回 = 約1秒間の変動が0.2g以内か）
+            weightHistory.push(w);
+            if (weightHistory.length > 3) weightHistory.shift();
+
+            if (weightHistory.length === 3) {
+                const maxW = Math.max(...weightHistory);
+                const minW = Math.min(...weightHistory);
+                
+                if (maxW - minW < 0.2) {
+                    // 数値が安定した！
+                    if (Math.abs(stableWeight - w) > 0.5) { 
+                        // 前回の安定値から変化があった場合のみ処理
+                        checkDifference(stableWeight, w);
+                        stableWeight = w;
+                    }
+                }
             }
         }
 
-        function playSizeAudio(w) {
-            let rounded = Math.round(w * 10) / 10;
+        function checkDifference(oldW, newW) {
+            const diff = oldW - newW; // 減った量
+            
+            // 5g未満の減少は無視（ノイズや微調整用）
+            if (diff < 5.0) return;
+
+            document.getElementById('diff-display').innerText = diff.toFixed(1) + " g 減";
+            
             let sizeKey = "";
             let color = "#fff";
 
-            if (rounded >= 15.5) { sizeKey = "2L"; color = "#ff4757"; }
-            else if (rounded >= 12.0) { sizeKey = "L"; color = "#ffa502"; }
-            else if (rounded >= 10.0) { sizeKey = "M"; color = "#2ed573"; }
-            else if (rounded >= 7.0)  { sizeKey = "S"; color = "#1e90ff"; }
+            // ご提示の平均果重に基づく判定基準
+            if (diff >= 15.5) { sizeKey = "2L"; color = "#ff4757"; }
+            else if (diff >= 12.0) { sizeKey = "L"; color = "#ffa502"; }
+            else if (diff >= 10.0) { sizeKey = "M"; color = "#2ed573"; }
+            else if (diff >= 7.0)  { sizeKey = "S"; color = "#1e90ff"; }
 
             if (sizeKey) {
                 document.getElementById('size-display').innerText = sizeKey + " サイズ";
                 document.getElementById('size-display').style.color = color;
-
-                // MP3再生
                 const audio = sounds[sizeKey];
-                audio.currentTime = 0; // 最初から再生
-                audio.play().catch(e => console.log("Audio Play Error:", e));
+                audio.currentTime = 0;
+                audio.play();
             }
         }
 
-        document.getElementById('tareBtn').onclick = async () => {
-            if (bluetoothChar) {
-                await bluetoothChar.writeValue(new Uint8Array([0x31]));
-            }
+        document.getElementById('tareBtn').onclick = () => {
+            stableWeight = currentWeight;
+            document.getElementById('size-display').innerText = "基準リセット";
+            document.getElementById('diff-display').innerText = "--.- g 減";
         };
     </script>
 </body>
