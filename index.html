@@ -1,75 +1,31 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <title>イチゴ選別システム V1.07</title>
-    <style>
-        body { background-color: #000 !important; color: #fff !important; text-align: center; font-family: sans-serif; padding: 20px; }
-        #weight { font-size: 80px; font-weight: bold; color: #ff4757; margin: 20px 0; border: 3px solid #333; padding: 20px; border-radius: 20px; background: #111; }
-        .btn-container { display: flex; flex-direction: column; align-items: center; gap: 20px; }
-        .my-button { 
-            display: block !important; width: 90% !important; max-width: 400px; height: 90px; 
-            font-size: 26px; font-weight: bold; border-radius: 20px; border: none; cursor: pointer; color: white;
-            box-shadow: 0 6px rgba(255,255,255,0.2);
-        }
-        #connectBtn { background-color: #28a745 !important; }
-        #tareBtn { background-color: #ff8c00 !important; }
-    </style>
-</head>
-<body>
-    <h1>イチゴ選別システム V1.07</h1>
-    <div id="weight">待機中<span> g</span></div>
-    
-    <div class="btn-container">
-        <button id="connectBtn" class="my-button">① 接続する</button>
-        <button id="tareBtn" class="my-button">② 0gリセット</button>
-    </div>
+function announceSize(w) {
+            let rounded = Math.round(w * 10) / 10; // 0.1g単位で判定
+            let size = "";
+            let color = "#fff";
 
-    <p id="status" style="margin-top:30px; color: #888;">接続ボタンを押してください</p>
-
-    <script>
-        const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
-        const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
-        let bluetoothChar = null;
-
-        document.getElementById('connectBtn').onclick = async () => {
-            try {
-                const device = await navigator.bluetooth.requestDevice({
-                    filters: [{ name: 'ESP32_Strawberry_Scale' }],
-                    optionalServices: [SERVICE_UUID]
-                });
-                
-                const server = await device.gatt.connect();
-                const service = await server.getPrimaryService(SERVICE_UUID);
-                bluetoothChar = await service.getCharacteristic(CHARACTERISTIC_UUID);
-                
-                // 通知（Notify）を明示的に開始
-                await bluetoothChar.startNotifications();
-                
-                // データが届いた時の処理を登録
-                bluetoothChar.addEventListener('characteristicvaluechanged', (event) => {
-                    const value = new TextDecoder().decode(event.target.value);
-                    console.log("Received:", value);
-                    // 小数点第1位まで表示
-                    document.getElementById('weight').innerHTML = `${parseFloat(value).toFixed(1)}<span> g</span>`;
-                });
-
-                document.getElementById('status').innerText = "✅ 接続中：データ受信を開始しました";
-                document.getElementById('weight').innerText = "0.0 g";
-                
-            } catch (err) { 
-                alert("接続失敗: " + err); 
-                document.getElementById('status').innerText = "❌ エラーが発生しました";
+            // --- ご提示のデータに基づく新基準 (V1.20) ---
+            if (rounded >= 15.5) { 
+                size = "2L"; color = "#ff4757"; // 13〜15玉用
+            } else if (rounded >= 12.0) { 
+                size = "L"; color = "#ffa502";  // 17〜19玉用
+            } else if (rounded >= 10.0) { 
+                size = "M"; color = "#2ed573";  // 22〜23玉用
+            } else if (rounded >= 7.0) { 
+                size = "S"; color = "#1e90ff";  // 28〜32玉用
+            } else { 
+                size = "規格外"; color = "#888"; 
             }
-        };
 
-        document.getElementById('tareBtn').onclick = async () => {
-            if (bluetoothChar) {
-                try {
-                    await bluetoothChar.writeValue(new Uint8Array([0x31]));
-                } catch (err) { alert("リセット失敗: " + err); }
-            } else { alert("先に接続してください"); }
-        };
-    </script>
-</body>
-</html>
+            document.getElementById('size-display').innerText = size + " サイズ";
+            document.getElementById('size-display').style.color = color;
+
+            // 読み上げ：作業スピードを落とさないよう、サイズ名を先に言う設定も可能です
+            // 今回は「〇〇グラム、〇サイズ」の順です
+            const text = `${rounded.toFixed(1)}、${size}`;
+            const uttr = new SpeechSynthesisUtterance(text);
+            uttr.lang = 'ja-JP';
+            uttr.rate = 1.4; 
+            
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(uttr);
+        }
